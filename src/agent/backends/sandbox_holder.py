@@ -25,8 +25,12 @@ def set_sandbox(sandbox: Any | None, user_id: str = DEFAULT_USER_ID) -> None:
     """注册或移除某位用户的稳定沙箱 Proxy。"""
     with _registry_lock:
         if sandbox is None:
+            # 如果传入的是 None，表示注销
+            # 之所以需要一个注销,是因为如果用户长时间不操作后台会调用 Docker API 删掉容器
+            # 如果没有注销,前端可以拿到已经删除的容器
             _sandboxes_by_user.pop(user_id, None)
         else:
+            # 传入真实沙箱就登记
             _sandboxes_by_user[user_id] = sandbox
 
 

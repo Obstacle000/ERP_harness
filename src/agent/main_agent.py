@@ -350,7 +350,14 @@ def create_main_agent(
         skills_sync_middleware.sync_now()
         user_skills_restore_middleware.restore_now()
 
+    # 中间件是被编织进这个 LangGraph 图的执行节点里的钩子
+    # before_model / after_model：分别在每次模型节点执行前/后运行。
+    # wrap_model_call：包裹住模型调用本身，可以修改请求、重试或短路。
+    # before_agent / after_agent：在整个 Agent 循环开始前和完全结束后各运行一次。
+    # 有两种方式类继承和修饰器 两种方式差不多这里用的是类继承
+    # 修饰器的话 你在对应方法上面写一个例如@wrap_model_call即可,方法名任意
     middlewares = [
+        # 在你使用的 LangChain / Deep Agents 框架中，列表的位置本身就是语义，顺序变化会直接改变中间件的执行逻辑、包裹层级以及最终效果。
         # --- 自定义中间件（执行顺序 1→7）---
         SandboxHealthMiddleware(
             sandbox_manager=sandbox_manager_instance,
@@ -359,10 +366,12 @@ def create_main_agent(
             on_rebuild=_rehydrate_after_sandbox_rebuild if managed_sandbox else None,
             check_interval=SANDBOX_HEALTH_CHECK_INTERVAL_SECONDS,
         ),                                                            # 1. 沙箱健康检查 + 重建
+        # 阶段状态机与评审编排中间件
         HarnessPhaseMiddleware(router_model=router_llm),               # 2. 混合路由 + rubric 注入
         ContextInjectionMiddleware(user_context=user_context),        # 3. 用户上下文注入
         WarmMemoryMiddleware(store=store, user_id=user_context.user_id),
         ProgressiveSkillsMiddleware(skill_catalog),
+        # 下面两个中间件是把skill同步到沙箱的代码
         skills_sync_middleware,                                       # 4. 基础 Skills 同步
         user_skills_restore_middleware,                               # 5. 用户 Skills 恢复
         ToolsSummarizationMiddleware(),                               # 6. 摘要监控

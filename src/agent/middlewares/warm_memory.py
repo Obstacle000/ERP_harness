@@ -21,6 +21,7 @@ class WarmMemoryMiddleware(AgentMiddleware):
             try:
                 keeper = MemoryKeeper(self._store, self._user_id)
                 keeper.migrate_legacy_preferences()
+                #  # 从 Store 检索偏好并生成摘要字符串
                 brief = keeper.build_warm_brief()[:4000] or brief
             except Exception as exc:
                 middleware_logger.warning(f"Warm memory unavailable: {exc}")

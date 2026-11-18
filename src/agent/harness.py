@@ -14,6 +14,8 @@ Harness 编排模块（真 Harness 架构核心）
   其 grader 子Agent 会结构化产出 satisfied / needs_revision / failed 判定，
   needs_revision 时自动打回模型重做，形成真正的 Review 回路。
 """
+
+
 from __future__ import annotations
 
 import re
@@ -251,7 +253,8 @@ def _build_plan_from_todos(todos: list | None) -> dict | None:
 
     return Plan(steps=steps, current_step=current_step).model_dump()
 
-
+# 核心思想是：把 Agent 的执行过程规范为一个显式的结构化状态机（State Machine），
+# 并将 phase（阶段）、plan（规划）、review_result（评审结果）作为原生字段写入 LangGraph 的 state 中。
 class HarnessPhaseMiddleware(AgentMiddleware):
     """Harness 阶段状态机中间件。
 
@@ -276,7 +279,7 @@ class HarnessPhaseMiddleware(AgentMiddleware):
         return "HarnessPhaseMiddleware"
 
     def before_agent(self, state: Any, runtime: Runtime) -> dict[str, Any] | None:
-        """执行前：按需注入 rubric + 置初始阶段为 planning。
+        """执行前：按需注入 rubric(业务评审标准) + 置初始阶段为 planning。
 
         ``RubricMiddleware`` 本身是 state-driven 的：只有 state 中存在 rubric
         才会调用 grader。这里不再无条件注入 default rubric，因此“你好”等

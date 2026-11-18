@@ -16,10 +16,11 @@ class UserPreferences(BaseModel):
     preferred_chart_type: str = Field(default="bar", description="首选图表类型: bar/line/pie/scatter等")
     preferred_currency: str = Field(default="CNY", description="首选货币单位")
     preferred_language: str = Field(default="zh", description="首选语言: zh/en")
+    # 日常问ai时采购员通常不会具体指代某i个供应商常常会说"上次","那家"之类的口语化表达
     recent_suppliers: List[str] = Field(default_factory=list, description="最近查询的供应商")
     recent_queries: List[str] = Field(default_factory=list, description="最近的查询记录")
 
-
+# Procurement:采购
 class ProcurementContext(BaseModel):
     """采购上下文 - 每次请求注入到 Agent state"""
     user_id: str = Field(default="default_user", description="用户ID")

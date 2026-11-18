@@ -61,7 +61,7 @@ async def stream_chat_response(
     - 实时将 assistant 回复追加到 display_messages
     - 流结束后持久化到 MongoDB
     """
-    # 每个用户有独立 Agent（含 Proxy、中间件缓存和 SandboxManager 映射）。
+    # 每个用户有独立 Agent（含 Proxy、中间件缓存和 SandboxManager 映射）。也就是独立session
     session = await agent_loader.get_session(user_id, username)
     config = traced_config(agent_loader.create_config(thread_id, user_id))
     if resume_data is not None:
@@ -101,6 +101,7 @@ async def stream_chat_response(
 
     import time
     lock_started = time.perf_counter()
+    # 防止同一个用户两个会话同时覆盖 /tmp、/workspace 中的文件
     await session.run_lock.acquire()
     event('request.lock_wait', duration_ms=(time.perf_counter()-lock_started)*1000)
     lease_acquired = sandbox_manager.acquire_lease(user_id)

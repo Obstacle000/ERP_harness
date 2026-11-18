@@ -18,9 +18,16 @@ class ERPHttpClient:
     _instance: Optional['ERPHttpClient'] = None
     _client: Optional[httpx.AsyncClient] = None
 
+    # 通过 重写 Python 类的 __new__ 方法 来实现单例模式
+    # 负责创建并返回一个类的实例。
+    # 虽然平时用得最多的是 __init__，但其实在 Python 里，创建对象的过程是分两步走的：
+    #   1. __new__（造物主）：负责在内存中凭空捏造出一个对象，并返回它。
+    #   2. __init__（装修工）：负责接收这个刚造出来的对象，给它初始化（比如赋初始值）。
     def __new__(cls):
         if cls._instance is None:
+            # 只有第一次调用时，才真正去创建对象
             cls._instance = super().__new__(cls)
+        # 无论后面调用多少次，都直接返回第一次创建好的那个对象
         return cls._instance
 
     @property

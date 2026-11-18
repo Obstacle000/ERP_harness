@@ -31,7 +31,32 @@ from .sandbox_setup import SandboxConfig, create_secure_sandbox
 from ..config import SANDBOX_IDLE_TIMEOUT_MINUTES, SANDBOX_WARM_POOL_SIZE
 from ..log_utils import sandbox_logger
 from ..observability import measured
+# 简单来说,首先每一个创建出来的容器都是一个预热容器CustomOpenSandbox
+# 新容器是通过_create_warm_container创建的容器名:固定前缀+uuid
+# 创建添加包装为SandboxEntry添加到_entries属性里,此时状态为warm,且用户user_id为""
+# 所以每一个容器底层是一样的,接下来要做的是给他们分配
+# 在_claim_from_warm_pool里遍历_entries找预热中容器条目,分配用户id,并把状态改成claimed
+# 在main_agent调用get_sandbox拿到物理容器对象
+# 调用链:
+# main_agent
+#       ↓
+# get_sandbox
+#       ↓
+# _claim_from_warm_pool
+#       ↓
+# _create_warm_container
+# 然后用SandboxBackendProxy包装get_sandbox拿到的CustomOpenSandbox
+# 接着用set_sandbox往_sandboxes_by_user字典添加沙箱
+# 代理容器和manager会在下面的中间件当中被传入使用,典型的就是SandboxHealthMiddleware
+# 这个中间件实现了如果容器死掉,重新拉起的逻辑,他在每一次的before_agent,都会检查容器状态,重新拉起新容器
+# 调用的是_sandbox_manager.rebuild,里面走的不是预热的逻辑而是直接调用_create_for_user方法
+# 这个方法直接创建容器,分配用户,包装条目
 
+# 那么代理有啥用?看起来像是脱裤子放屁
+# 假设没有代理,要知道main_agent里的很多组件内部都存了沙箱的内存地址(CustomOpenSandbox的内存地址)
+# 一旦发生OOM,尽管后台重新拉起了一个全新的物理容器,所有依赖这个地址的组件指向的还是原来的死掉的容器内存地址
+# 想要替换新的容器,每个组件都得换,太麻烦了
+# 如果有代理,只需要在代理内部把新的容器替换一次就行了
 
 # ============================================================
 # 沙箱状态枚举
@@ -50,7 +75,8 @@ class SandboxState:
 # ============================================================
 
 class SandboxEntry:
-    """沙箱条目（跟踪容器的完整生命周期）"""
+    """单个沙箱条目（跟踪容器的完整生命周期）"""
+    # 单个沙箱的基本信息
 
     def __init__(
         self,
@@ -99,7 +125,7 @@ class SandboxEntry:
 # ============================================================
 # 沙箱生命周期管理器
 # ============================================================
-
+#  容器调度中心里面实现了预热池的功能
 class SandboxManager:
     """
     沙箱生命周期管理器（Harness 五态模型）
@@ -135,6 +161,10 @@ class SandboxManager:
         self._warm_creating = 0                        # 避免并发补池超量创建
 
         # --- 配置 ---
+        # 这个数字不是意味着同一时刻只能由两个CustomOpenSandbox
+        # 而是指预热池里空闲容器的数量
+        # 同一时刻有非常多的CustomOpenSandbox在跑
+        # 空闲容器从一开始诞生，就已经是 CustomOpenSandbox 了
         self._warm_pool_size = (
             SANDBOX_WARM_POOL_SIZE if warm_pool_size is None else warm_pool_size
         )
@@ -193,7 +223,9 @@ class SandboxManager:
         # python:3.11-slim 已带 Python；图表和 Skill 依赖按需安装到
         # /workspace/python-packages，预热阶段不做耗时网络安装。
         config = SandboxConfig(name=name, runtimes=[])
+        # 挂载 512MB 内存限制、只读文件系统、seccomp 白名单
         sandbox = create_secure_sandbox(config)
+        # 提前在容器内部建好常用目录，节省后续 Agent 执行时间
         sandbox.execute(
             "mkdir -p /workspace /workspace/data /workspace/analysis "
             "/workspace/output /skills"
@@ -215,6 +247,9 @@ class SandboxManager:
         3. 预热池有空闲 → 认领
         4. 新建容器
         """
+        # main_agent调用这个方法拿到raw_sandbox
+        # 然后由于CustomOpenSandbox继承了BaseSandbox,可以用SandboxBackendProxy包装成代理
+        # 接着用set_sandbox往_sandboxes_by_user注册用户刚认领的沙箱
         with self._lock:
             # 1. 检查用户是否已有沙箱
             container_name = self._user_map.get(user_id)
@@ -266,6 +301,7 @@ class SandboxManager:
                     self._persist_to_mongodb(entry)
 
                     # 补充预热池
+                    # 此时会往_entries添加空容器条目,容器名是固定前缀+uuid
                     threading.Thread(
                         target=self.ensure_warm_pool,
                         daemon=True,

@@ -10,8 +10,38 @@ from langchain.agents.middleware import AgentMiddleware, Runtime
 
 from ..log_utils import middleware_logger
 from ..observability import measured
-
-
+# 沙箱流程
+# 1. 容器创建与安全防爆（sandbox_setup.py）
+# 沙箱不是普通的 Docker 容器，启动时挂载了严密的物理安全护栏：
+#   只读根文件系统（--read-only）：除了 /workspace、/skills 等白名单挂载点，Agent 无法篡改系统核心文件；
+#   严格资源限额：内存上限锁死 512MB，CPU 限制为 1.0 核（防止 Agent 写出死循环吃满服务器）；
+#   安全沙盒拦截：启用了 Linux seccomp 系统调用白名单，并丢弃所有 root capability 特权。
+# Linux Capabilities（权能 / 特权切片）:
+#   传统linux里用户所拥有的权限是极端的,分为普通用户和root管理员
+#   如果像要执行root特有操作一个用户必须拿到全部额root权限,这很不安全
+#   解决方案：把 Root 特权切成几万块“Capability”
+# Linux seccomp（安全计算模式 / 系统调用防火墙）:
+#   seccomp（Secure Computing Mode）就是直接装在 Linux 内核上的“系统调用安检机”
+# 2. 秒级认领机制：预热池（sandbox_manager.py）
+# 如果每个用户发一条消息，后端都现场去执行 docker run，冷启动需要 2~3 秒。
+#   系统后台常驻维护一个 预热池（Warm Pool）；
+#   用户请求一到，直接从池子里认领（Claim）现成容器，耗时 < 100ms；
+#   同时在后台异步再新建一个容器补齐池子；
+#   用户 30 分钟不说话，容器自动销毁释放资源。
+# 3. 文件是怎么进去的？
+# 第一层（基础工程包）：调用 bootstrap_sandbox，把代码目录通过 Docker API 解包到容器的 /workspace；
+# 第二层（系统内置技能）：SkillsSyncMiddleware 计算相对路径的 MD5 哈希，只增量上传变动的文件，不搞无脑全量拷贝；
+# 第三层（用户私有技能）：UserSkillsRestoreMiddleware 去 MongoDB 查该用户的私有技能，解码写入 /skills/custom/，并自动在沙箱中执行 pip install -r requirements.txt。
+# 4. 可热替换的“稳定代理”（sandbox_proxy.py）
+# 在老式架构中，如果容器因为内存超标（OOM）或者进程崩溃被 Docker 杀死了：
+#   外面的 Agent、文件读取工具、Bash 工具全都会报错（因为它们引用的容器连接断了）。
+#   本项目的做法是：给 Agent 提供一个“假身”——SandboxBackendProxy。
+#   Agent 和工具终生只跟这个代理打交道；
+#   一旦底层容器死掉，SandboxHealthMiddleware 自动拉起新容器，在代理内部执行 replace_backend(新容器)，并触发代次更新（generation + 1）；
+#   技能中间件检测到代次变化，立即把技能重新灌进新容器；
+#   整个过程 Agent 完全不感知，所有的工具调用依然无缝可用
+# 5. 大模型怎么使用沙箱?
+# 大模型本身感知不到沙箱,他能做的只有调用工具,我们把沙箱操作封装成工具就能给大模型用了
 class SandboxHealthMiddleware(AgentMiddleware):
     """在每次 Agent 运行前验证并在需要时重建用户沙箱。
 

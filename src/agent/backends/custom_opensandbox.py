@@ -18,7 +18,8 @@ from deepagents.backends import DEFAULT_EXECUTE_TIMEOUT
 from ..log_utils import sandbox_logger
 from ..config import SANDBOX_WORK_DIR
 
-
+# CustomOpenSandbox 是底层的“物理沙箱实现类（底层驱动）”，
+# 但 Agent 直接拿在手里调用的其实是它的“替身代理类（SandboxBackendProxy）”
 class CustomOpenSandbox(BaseSandbox):
     """
     Docker 容器沙箱后端
@@ -31,7 +32,7 @@ class CustomOpenSandbox(BaseSandbox):
         backend = DockerSandboxBackend(container_name="erp-sandbox")
         result = backend.execute("python -c 'print(1+1)'")
     """
-
+    # 每一个真实在跑的 Docker 容器，都对应一个 CustomOpenSandbox 实例；
     def __init__(
         self,
         container_name: str = "erp-sandbox",
