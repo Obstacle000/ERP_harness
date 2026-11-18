@@ -1,7 +1,7 @@
 # ERP-Agent (Harness Engineering)
 
 基于 **DeepAgents / LangGraph** 架构构建的企业级采购与数据分析 AI Agent 系统，采用 **Harness 工程化护栏体系**，具备高可靠性、安全容器隔离与自愈能力。
-
+B站:Harness Engineering企业级多Agent协同项目实战！Multi-Agent+SandBox+自我进化的Skill+人工介入-码士集团AI大模型
 ---
 
 ## 核心架构特性
