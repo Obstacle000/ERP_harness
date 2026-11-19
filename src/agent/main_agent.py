@@ -343,11 +343,15 @@ def create_main_agent(
     )
 
     def _rehydrate_after_sandbox_rebuild(_replacement) -> None:
+        # 1. 重新打包上传项目代码
         bootstrap_sandbox(sandbox_backend)
+        # 2. 撕毁“内置技能”的缓存记录
         skills_sync_middleware.invalidate()
+        # 3. 撕毁“用户自定义技能”的缓存记录
         user_skills_restore_middleware.invalidate()
-        # 立即回填，避免本次失败后的下一条请求才重新拥有 Skills。
+        # 4. 立即强制把宿主机内置技能重新灌入新容器
         skills_sync_middleware.sync_now()
+        # 5. 立即强制把 MongoDB 里的用户自定义技能重新灌入新容器并 pip install
         user_skills_restore_middleware.restore_now()
 
     # 中间件是被编织进这个 LangGraph 图的执行节点里的钩子
@@ -380,7 +384,6 @@ def create_main_agent(
         SandboxCircuitBreakerMiddleware(failure_threshold=3, recovery_timeout=60),  # 8. 熔断器
         # --- Harness 评审器（RubricMiddleware）---
         # 收到 rubric 后，grader 子Agent 结构化产出 satisfied/needs_revision/failed，
-        # needs_revision 时自动打回模型重做，形成真实 Review 回路（非 prompt 软约束）
         SafeRubricMiddleware(model=grader_llm, max_iterations=_review_max_iterations),
         ReviewExecutionGate(_harness_config),  # after_agent 逆序：先升级，再审查
         # --- 框架内置中间件（调用限制）---

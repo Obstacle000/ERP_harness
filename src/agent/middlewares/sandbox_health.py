@@ -56,8 +56,8 @@ class SandboxHealthMiddleware(AgentMiddleware):
         user_id: str = "default_user",
         sandbox_backend=None,
         on_rebuild: Callable[[Any], None] | None = None,
-        check_interval: float = 30.0,
-        failure_threshold: int = 1,
+        check_interval: float = 30.0, # 容器状态探测的频率
+        failure_threshold: int = 1, # 触发重建的容忍度
     ):
         self._sandbox_manager = sandbox_manager
         self._user_id = user_id
@@ -95,7 +95,7 @@ class SandboxHealthMiddleware(AgentMiddleware):
 
         now = time.monotonic()
         if self._healthy and now - self._last_check < self._check_interval:
-            return
+            return # # 上次检测是好的，且在 30 秒内，直接放行
         self._last_check = now
 
         if self._ping_sandbox():
@@ -116,7 +116,7 @@ class SandboxHealthMiddleware(AgentMiddleware):
             f"{self._user_id} ({self._consecutive_failures} consecutive)"
         )
         if self._consecutive_failures < self._failure_threshold:
-            return
+            return # 判定连续 Ping 失败多少次，才真正触发沙箱销毁重建（rebuild）
 
         self._rebuild_sandbox()
 

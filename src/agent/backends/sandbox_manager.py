@@ -46,11 +46,18 @@ from ..observability import measured
 #       ↓
 # _create_warm_container
 # 然后用SandboxBackendProxy包装get_sandbox拿到的CustomOpenSandbox
+# 注意现在容器虽然分配了用户但是里面啥也没有,只有/workspace/data /workspace/analysis /workspace/output /skills
+# 所以要调用bootstrap_sandbox往里填充必要的东西
+# 需要划分好图表输出区（charts）、数据区（data）、产物区（output），规范 Agent 的落地文件。
+# 然后把解压出来的基础技能直接拷贝到根目录下的 /skills/
+# 另外,有一个叫_rehydrate_after_sandbox_rebuild的方法,他在重建时调用,传入SandboxHealthMiddleware
+# 他干的事情就是调用bootstrap_sandbox重新打包上传,删缓存,同步技能
 # 接着用set_sandbox往_sandboxes_by_user字典添加沙箱
 # 代理容器和manager会在下面的中间件当中被传入使用,典型的就是SandboxHealthMiddleware
 # 这个中间件实现了如果容器死掉,重新拉起的逻辑,他在每一次的before_agent,都会检查容器状态,重新拉起新容器
 # 调用的是_sandbox_manager.rebuild,里面走的不是预热的逻辑而是直接调用_create_for_user方法
 # 这个方法直接创建容器,分配用户,包装条目
+#
 
 # 那么代理有啥用?看起来像是脱裤子放屁
 # 假设没有代理,要知道main_agent里的很多组件内部都存了沙箱的内存地址(CustomOpenSandbox的内存地址)
