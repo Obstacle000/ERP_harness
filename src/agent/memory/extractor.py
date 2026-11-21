@@ -110,7 +110,8 @@ def _has_trigger(text: str) -> bool:
 def _has_imperative(text: str) -> bool:
     return any(h in text for h in IMPERATIVE_HINTS)
 
-
+# 没有实现负向偏好,命中不要之类的直接跳过
+# 要实现的话要么关键按此抽取,加forbidden_outputs,要么用大模型它会调用remember,往store添加业务约束
 def _pick(text: str, table: Dict[str, str], *, require_trigger: bool) -> Optional[str]:
     """在一段文本里按关键词表取值。
 
@@ -272,13 +273,13 @@ def summarize_episode(
     window = list(messages or [])
     if not window:
         return {}
-
+    # 1. 抓取用户目标：第一条人类输入
     goal = ""
     for message in window:
         if _role_of(message) in ("human", "user"):
             goal = _content_of(message).strip().replace("\n", " ")
             break
-
+    # 2. 抓取最终结果：最后一条 AI 回复
     outcome = ""
     for message in reversed(window):
         if _role_of(message) in ("ai", "assistant"):
@@ -286,7 +287,7 @@ def summarize_episode(
             if text:
                 outcome = text
                 break
-
+    # 3. 收集调用过的工具
     tools: List[str] = []
     for message in window:
         for call in _tool_calls_of(message):
@@ -296,7 +297,7 @@ def summarize_episode(
         standalone = _tool_name_of(message)
         if standalone and _role_of(message) == "tool" and standalone not in tools:
             tools.append(standalone)
-
+    # 4. 截断与组装
     limit = max(80, cfg.episode_summary_chars)
     summary_parts = []
     if goal:
@@ -304,7 +305,7 @@ def summarize_episode(
     if outcome:
         summary_parts.append(f"结论：{outcome[:limit]}")
     summary = " ｜ ".join(summary_parts) or "（无有效内容）"
-
+    # 5. 关键词字典分类（不调模型）
     task_type = _classify(f"{goal} {outcome}")
     tags = [task_type]
     if tools:

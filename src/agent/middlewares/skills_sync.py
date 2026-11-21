@@ -42,7 +42,20 @@ class SkillsSyncMiddleware(AgentMiddleware):
     开发模式（LocalShellBackend）：
     - 本地执行无需同步，仅校验技能文件完整性
     """
-
+    # 在本项目中，“技能文件缓存” 并不是一个简单的 Redis 或内存字典，而是针对“宿主机代码、Docker 沙箱网络 IO、MongoDB 数据库” 三方开销，
+    # 设计的一套“两级 MD5 哈希指纹 + 沙箱代次（Generation）联动” 的高性能增量缓存体系。
+    # 内置技能的增量缓存:
+    #   中间件在内存中维护了一个 _file_hashes: dict[rel_path, str]。
+    #   每次比对文件的 MD5,哈希没变，说明文件没被修改，直接跳过，绝不重复上传沙箱
+    #   为了判断整个技能包有没有变，把文件夹内所有子文件的 相对路径 + 单文件MD5 拼接起来，再算一次总哈希
+    # 用户自定义技能的恢复缓存（UserSkillsRestoreMiddleware）
+    #   用户从 GitHub 下载的技能存在 MongoDB 里
+    #   维护 _restored_hashes: dict[str, str] 记录沙箱中已有文件的哈希。
+    #   只有当用户新下载了 Skill，或者修改了文件时，才往沙箱写入增量文件；已有文件命中缓存直接 0 毫秒放行。
+    # 沙箱热替换时的“缓存瞬间失效（Cache Invalidation）”
+    # 如果底层的 Docker 容器挂死了，热替换拉起了一个“全新的空容器”，缓存会怎么样？
+    # 如果缓存不知道容器换了，还会以为“文件早已同步过”，结果新容器里空空如也，大模型一调用技能就会报 File Not Found
+    # 本项目通过 generation（代次指针） 完美解决了这个问题
     def __init__(self, skills_dir: str | Path | None = None, sandbox_backend=None):
         self._skills_dir = Path(skills_dir) if skills_dir else None
         self._sandbox_backend = sandbox_backend
@@ -84,13 +97,17 @@ class SkillsSyncMiddleware(AgentMiddleware):
             return
 
         if self._sandbox_backend is not None:
+            # generation:当前热替换的代次
+            # 热替换代理沙箱内部替换物理沙箱
+            # 调用SandboxBackendProxy的replace_backend
             generation = getattr(self._sandbox_backend, "generation", None)
             if (
+                # 侦测到底层物理容器被热替换了（代次变了）
                 generation is not None
                 and generation != self._last_sandbox_generation
             ):
-                self.invalidate()
-            self._sync_to_sandbox()
+                self.invalidate()# 一键清空所有已同步缓存字典
+            self._sync_to_sandbox()# # 增量强制重灌，把技能重新灌进新容器
             self._last_sandbox_generation = generation
         else:
             self._validate_local_skills()

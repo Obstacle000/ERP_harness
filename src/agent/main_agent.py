@@ -61,14 +61,17 @@ def _upload_project_to_sandbox(sandbox) -> bool:
 
         tar_stream = io.BytesIO()
         with tarfile.open(fileobj=tar_stream, mode="w:gz") as tar:
+            # 把 PROJECT_ROOT 目录下的文件打包成一个 gzip 压缩的 tar 包，写入内存中的 tar_stream。
+            # 用 rglob("*") 递归遍历整个项目根目录
             for file_path in sorted(PROJECT_ROOT.rglob("*")):
                 if not file_path.is_file():
                     continue
                 rel = str(file_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
                 if _should_skip(rel):
                     continue
+                # arcname=rel 保证压缩包内是相对路径，解压后不会多出一层 PROJECT_ROOT 的绝对路径。
                 tar.add(str(file_path), arcname=rel)
-
+        # 最后 seek(0) 回到开头，read() 出完整字节流 data。
         tar_stream.seek(0)
         data = tar_stream.read()
 
@@ -79,17 +82,20 @@ def _upload_project_to_sandbox(sandbox) -> bool:
         errors = [getattr(item, "error", None) for item in responses]
         if not responses or any(errors):
             raise RuntimeError(f"archive upload failed: {errors or 'no response'}")
-
+        # -C /workspace/src：解压到目标目录。
+        # && rm -f：解压成功后立即删除压缩包，不占沙箱空间。
         unpack = sandbox.execute(
             f"tar -xzf '{archive_path}' -C '{remote_dir}' && rm -f '{archive_path}'"
         )
+        # 检查 exit_code，失败就抛异常。
         if unpack.exit_code != 0:
             raise RuntimeError(f"archive extraction failed: {unpack.output}")
 
-        # 获取文件数量和总大小
+        # find ... -type f | wc -l：统计解压后文件数
         count_result = sandbox.execute(
             f"find {remote_dir} -type f 2>/dev/null | wc -l"
         )
+        # du -sh ... | cut -f1：统计总大小。
         size_result = sandbox.execute(
             f"du -sh {remote_dir} 2>/dev/null | cut -f1"
         )
@@ -326,9 +332,49 @@ def create_main_agent(
     router_llm = build_review_router(_review_cfg)
 
     # 注意：create_deep_agent 内部已自动添加：
-    # - SummarizationMiddleware（自动摘要 + compact_conversation 工具）
-    # - FilesystemMiddleware, SkillsMiddleware, SubAgentMiddleware
-    # - TodoListMiddleware, PatchToolCallsMiddleware, MemoryMiddleware
+    # 装在最贴近模型请求的一层。
+    # 官方中间件:
+    # # ─── 1. 核心底座中间件（Core Scaffolding） ───
+    # 1. FilesystemMiddleware
+    #    # 提供沙箱/本地文件系统的底层读写执行工具（ls/cat/write/edit）与权限校验
+    #
+    # 2. SubAgentMiddleware
+    #    # 提供 task 工具，支持向子 Agent 委派任务与上下文隔离
+    #
+    # 3. _ParentNotifierMiddleware
+    #    # 子 Agent 向上级汇报状态的通信通道
+    #
+    # 4. SummarizationMiddleware
+    #    # 会话过长时自动触发摘要，并提供 compact_conversation 工具防爆上下文
+    #
+    # 5. PatchToolCallsMiddleware
+    #    # 修复部分大模型（如 DeepSeek/Claude）在 Tool Call 格式解析上的边缘格式 Bug
+    #
+    # 6. TodoListMiddleware
+    #    # 注入 write_todos 工具与任务规划 Prompt 说明书
+    #
+    # # ─── 2. 外部自定义中间件的插入锚点 ───
+    # # 【你传入的自定义中间件：HarnessPhase、ProgressiveSkills 等就是插在这个位置！】
+    #
+    # # ─── 3. 提示词与记忆增强中间件 ───
+    # 7. SkillsMiddleware
+    #    # 官方技能加载中间件（本项目设为 None，由自定义的 ProgressiveSkills 替代）
+    #
+    # 8. PromptCachingMiddleware
+    #    # 对系统提示词做前缀缓存标记（为 Anthropic / 兼容 API 节省 Token 费用）
+    #
+    # 9. MemoryMiddleware
+    #    # 官方静态记忆注入中间件（将 AGENTS.md 读入提示词中）
+    #
+    # # ─── 4. 安全、中断与兜底尾部中间件（Tail） ───
+    # 10. HumanInTheLoopMiddleware
+    #     # 人工审批中断中间件（拦截需要审批的敏感工具，如 order_create）
+    #
+    # 11. UnsupportedContentMiddleware
+    #     # 过滤不支持的多媒体、特殊格式输入
+    #
+    # 12. ModelRefusalMiddleware
+    #     # 捕获大模型拒绝回答（Refusal）的安全错误并做优雅降级
     # 我们只需添加自定义中间件 + 调用限制
     # 沙箱重建后不仅替换底层 Docker 连接，还要重新填充项目、基础 Skills 和
     # 用户持久化 Skills。两个中间件持有同一个稳定 Proxy，缓存必须一起失效。
@@ -373,25 +419,29 @@ def create_main_agent(
         # 阶段状态机与评审编排中间件
         HarnessPhaseMiddleware(router_model=router_llm),               # 2. 混合路由 + rubric 注入
         ContextInjectionMiddleware(user_context=user_context),        # 3. 用户上下文注入
-        WarmMemoryMiddleware(store=store, user_id=user_context.user_id),
+        WarmMemoryMiddleware(store=store, user_id=user_context.user_id), # 拿偏好装到提示词
         ProgressiveSkillsMiddleware(skill_catalog),
         # 下面两个中间件是把skill同步到沙箱的代码
         skills_sync_middleware,                                       # 4. 基础 Skills 同步
         user_skills_restore_middleware,                               # 5. 用户 Skills 恢复
         ToolsSummarizationMiddleware(),                               # 6. 摘要监控
-        MemoryUpdateMiddleware(store=store, user_id=user_context.user_id),      # 7. 偏好提取（WARM）
+        # 有三种记忆,语义记忆(MemoryUpdateMiddleware),情节记忆(MemoryConsolidationMiddleware)
+        # 以及程序记忆(remember工具),只有程序记忆(read_memory()工具)使用了keeper的分数检索search()
+        MemoryUpdateMiddleware(store=store, user_id=user_context.user_id),      # 7. 偏好提取存储（WARM）
         MemoryConsolidationMiddleware(store=store, user_id=user_context.user_id),   # 7.5 情节归档 + 遗忘（COLD）
         SandboxCircuitBreakerMiddleware(failure_threshold=3, recovery_timeout=60),  # 8. 熔断器
         # --- Harness 评审器（RubricMiddleware）---
         # 收到 rubric 后，grader 子Agent 结构化产出 satisfied/needs_revision/failed，
         SafeRubricMiddleware(model=grader_llm, max_iterations=_review_max_iterations),
-        ReviewExecutionGate(_harness_config),  # after_agent 逆序：先升级，再审查
+        ReviewExecutionGate(_harness_config),  # after_agent 逆序：先升级，再审查(洋葱模型)
+
         # --- 框架内置中间件（调用限制）---
         ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS),          # 模型调用上限
         ToolCallLimitMiddleware(run_limit=MAX_TOOL_CALLS),            # 工具调用上限
     ]
 
     # ===== 6. 构建系统提示词 =====
+    # preferences 是老版本的静态占位符；而真正的最新偏好确实是动态存在 warm_memory 里的。
     system_prompt = MAIN_SYSTEM_PROMPT.format(
         user_id=user_context.user_id,
         username=user_context.username,
@@ -419,7 +469,7 @@ def create_main_agent(
         skills=None,
         memory=[str(MEMORY_DIR / "AGENTS.md")],
         backend=composite_backend,
-        interrupt_on=INTERRUPT_ON_TOOLS,
+        interrupt_on=INTERRUPT_ON_TOOLS,# 需要人工介入的工具
         checkpointer=checkpointer,
         store=store,
         name="procurement-main-agent",

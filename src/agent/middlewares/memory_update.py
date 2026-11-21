@@ -64,6 +64,7 @@ class MemoryUpdateMiddleware(AgentMiddleware):
             current_messages = messages[start:]
             updates = extract_preferences(current_messages, self._config)
             if self._config.llm_extraction_enabled and current_messages:
+                # 开启llm
                 from ..config import get_llm
                 from ..memory.extractor import llm_extract_preferences
                 try:

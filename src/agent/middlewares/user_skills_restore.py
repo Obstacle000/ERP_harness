@@ -12,7 +12,7 @@ from langchain.agents.middleware import AgentMiddleware, Runtime
 from ..config import skills_store_namespace
 from ..log_utils import middleware_logger
 
-
+# 得把数据库里的数据写道沙箱磁盘,因为操作系统只认文件
 class UserSkillsRestoreMiddleware(AgentMiddleware):
     """以“每文件一条 Store 记录”的形式恢复用户自定义 Skills。
 

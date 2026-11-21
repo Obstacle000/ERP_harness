@@ -283,7 +283,7 @@ class SandboxManager:
         if claimed:
             return claimed
 
-        # 4. 新建容器
+        # 4. 没有空闲容器就新建容器
         sandbox_logger.info(f"No warm/cached sandbox for {user_id}, creating new")
         return self._create_for_user(user_id)
 

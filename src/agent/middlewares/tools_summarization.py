@@ -33,14 +33,17 @@ class ToolsSummarizationMiddleware(AgentMiddleware):
     @property
     def name(self) -> str:
         return "ToolsSummarizationMiddleware"
-
+    # 作者最初的设想： 想自己手写一个中间件，给大模型提供一个 compact_conversation（压缩对话）工具，当消息太长时在提示词里提醒大模型去压缩。
+    # 后来发现官方框架内置的 SummarizationMiddleware 已处理自动压缩,所以本中间件仅记录状态供监控
     def before_agent(self, state: Any, runtime: Runtime) -> dict[str, Any] | None:
         """检查上下文长度，必要时注入压缩提示"""
-        # 框架内置的 SummarizationMiddleware 已处理自动压缩
-        # 本中间件仅记录状态供监控
         messages = state.get("messages", []) if isinstance(state, dict) else []
         msg_count = len(messages)
         if msg_count > 40:
+            # 在每次大模型思考前（before_agent），数一下当前对话有多少条消息。
+            # 如果超过 40 条（msg_count > 40），就往后台打一条调试日志：
+            # Conversation length: 45 messages (consider compacting)
+            # 方便后端开发排查：“为什么这个用户的这一轮提问特别慢、Token 费用特别高？"
             middleware_logger.debug(
                 f"Conversation length: {msg_count} messages (consider compacting)"
             )

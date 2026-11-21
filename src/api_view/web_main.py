@@ -26,17 +26,21 @@ from ..agent.config import SANDBOX_MAINTENANCE_INTERVAL_SECONDS
 async def _sandbox_maintenance(stop_event: asyncio.Event) -> None:
     """后台补齐预热池、回收空闲容器。
 
-    主请求中的 HealthMiddleware 才负责“重建 + Proxy 热替换 + 文件回填”；此处
+    主请求中的 SandboxHealthMiddleware 才负责“重建 + Proxy 热替换 + 文件回填”；此处
     绝不直接调用 ``health_check_all``，否则 Agent 仍会持有旧后端引用。
     """
+    # SandboxHealthMiddleware该中间件每一次请求前都会检查容器并重建
     while not stop_event.is_set():
         try:
+            # 1. 回收超时不用的沙箱
             await asyncio.to_thread(sandbox_manager.cleanup_idle_sandboxes)
+            # 2. 只要池子没满，定期自动补齐预热池！
             await asyncio.to_thread(sandbox_manager.ensure_warm_pool)
         except Exception as exc:
             web_logger.warning(f"Sandbox maintenance iteration failed: {exc}")
 
         try:
+            # 每隔一段时间（如 60 秒）自动跑一轮
             await asyncio.wait_for(
                 stop_event.wait(), timeout=SANDBOX_MAINTENANCE_INTERVAL_SECONDS
             )
@@ -51,8 +55,10 @@ async def lifespan(app: FastAPI):
     stop_event = asyncio.Event()
     maintenance_task = None
     try:
+        # 1. 服务启动的第 0 秒，立刻调用 ensure_warm_pool 灌满预热池！
         # 预热失败不阻止 Web 服务启动；首个请求仍会按需创建并回退到 LocalShell。
         await asyncio.to_thread(sandbox_manager.ensure_warm_pool)
+        # # 2. 启动上面的常驻后台线程持续巡检
         maintenance_task = asyncio.create_task(
             _sandbox_maintenance(stop_event), name="sandbox-maintenance"
         )

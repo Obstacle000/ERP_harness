@@ -30,6 +30,10 @@ def read_memory(query: str, limit: int = 5) -> str:
     Returns:
         命中的历史记忆列表（含类型、日期、相关度），没有命中会明确说明。
     """
+    # 分数检索方法只用在了read_memory工具里面
+    # 其他时候装入提示词的时候用的是分页搜索逻辑
+    # 遗忘倒是删了,装配没带上程序记忆玩,模型调了这个工具也没啥用
+    # 当前项目中程序记忆设计有点超前了,后面可以改改,把那个touch()用起来
     store = get_current_store()
     if store is None:
         return "当前没有可用的持久化 Store，无法检索历史记忆。"

@@ -52,6 +52,7 @@ class MemoryConsolidationMiddleware(AgentMiddleware):
             # Without a stable conversation ID, skip the archive rather than
             # overwrite every conversation with an ep_unknown record.
             if thread_id and digest and digest.get("summary"):
+                # 归档
                 keeper.archive_episode(
                     thread_id or digest.get("thread_id") or "unknown",
                     goal=digest.get("goal", ""),
@@ -68,7 +69,7 @@ class MemoryConsolidationMiddleware(AgentMiddleware):
                 middleware_logger.debug(
                     f"Episode archived: thread={thread_id}, type={digest.get('task_type')}"
                 )
-
+            # 同时遗忘超过上限的语义记忆和程序记忆
             forgotten = keeper.forget()
             if any(forgotten.values()):
                 middleware_logger.info(f"Memory sweep: {forgotten}")

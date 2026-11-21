@@ -352,7 +352,14 @@ class SkillCatalog:
             return guarded(reading)
         return [list_skills, read_skill, read_skill_resource]
 
-# 怎么跟 LangGraph 和系统提示词合体
+# 既然大模型有 list_skills 工具，直接让它查不就行了，为什么非要把目录预先塞进系统提示词？
+#   想象一下，如果系统提示词里完全没有技能目录，只有 list_skills 工具：
+#   当用户输入：“帮我核对 P001 零件的库存，低于 100 就生成采购建议”。
+#   大模型的现状：它只知道有基础工具（比如 inventory_page），它根本不知道沙箱里居然还有一个专门写好的、高精度的现成技能包 inventory_checker！
+#   致命结果：大模型根本不会想到去调 list_skills，而是直接拿零散的基础工具硬算，甚至写出有 bug 的执行逻辑。
+# 既然提示词里都放了目录，为什么还要留着 list_skills 工具？
+#   容量溢出保护： 如果系统只有 5 个内置技能，提示词完全装得下； 但如果企业运行久了，内置加用户自定义上传了 100 个技能，Prompt 根本塞不下，强行塞入会导致上下文爆炸。
+#    分级降级： 当技能很多时，System Prompt 只能装下前 20 项常用技能； 剩下的冷门技能，大模型如果发现当前目录里没有完全匹配的，就会通过 list_skills(query="xxx", offset=20) 去翻页和关键词搜索。
 class ProgressiveSkillsMiddleware(AgentMiddleware):
     def __init__(self, catalog):
         self.catalog = catalog

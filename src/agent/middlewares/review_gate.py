@@ -43,6 +43,8 @@ def execution_signals(state):
 
 class ReviewExecutionGate(AgentMiddleware):
     """Register AFTER RubricMiddleware so reverse after_agent order runs us first."""
+    # 监控 Agent 实际调了什么工具。如果发现它做了高危操作或复杂调用，立刻把审查级别动态升级，并给安全审查器打上标记。
+    # 配合SafeRubricMiddleware使用,先做升级,然后审查
     state_schema = HarnessPhaseState
 
     def __init__(self, config):
@@ -71,6 +73,7 @@ class SafeRubricMiddleware(RubricMiddleware):
     @hook_config(can_jump_to=["model"])
     def after_agent(self, state, runtime):
         if state.get("_review_write_attempted"):
+            # 如果模型调用了写操作工具,不让跳转,防止重写
             return self._write_reviewer.after_agent(state, runtime)
         return super().after_agent(state, runtime)
 

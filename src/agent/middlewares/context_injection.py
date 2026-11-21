@@ -29,7 +29,9 @@ class ContextInjectionMiddleware(AgentMiddleware):
     - 每个会话线程拥有独立的上下文副本
     - 线程安全：使用 threading.Lock 保护并发读写
     """
-
+    # 正常的话user_context应该来自前端传userid和username然后在agent_loader里的_build_agent_for_user构建
+    # 否则就是默认的初始化
+    # 没有注册接口前端会发一个测试数据,userid是固定的
     def __init__(self, user_context: ProcurementContext | None = None):
         # 默认上下文（仅作为 fallback）
         self._default_context = user_context or ProcurementContext()
@@ -44,6 +46,9 @@ class ContextInjectionMiddleware(AgentMiddleware):
 
     def before_agent(self, state: Any, runtime: Runtime) -> dict[str, Any] | None:
         """在 Agent 执行前注入用户上下文"""
+        # 这个方法作用仅仅是debug,上下文注入早就在注册中间件后直接format到系统提示词里去了
+        # 偏好也在WarmMemoryMiddleware做了,所以这个中间件当不存在就行了
+        # 这个恐怕是脚手架自带的,架子搭好了，但功能被拆分分流
         # 从 runtime 获取当前线程 ID
         thread_id = self._get_thread_id(runtime)
         ctx = self._get_context(thread_id)
@@ -102,6 +107,7 @@ class ContextInjectionMiddleware(AgentMiddleware):
     def _get_context(self, thread_id: str) -> ProcurementContext:
         """获取指定线程的上下文（线程安全）"""
         with self._lock:
+            # 下面永远是none,因为update_context没人调用
             ctx = self._context_store.get(thread_id)
             if ctx is not None:
                 return ctx

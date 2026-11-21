@@ -21,12 +21,12 @@ Harness 编排模块（真 Harness 架构核心）
 #     ↓
 # SandboxHealthMiddleware.before_agent
 #     ↓            └─ 测 Docker 沙箱容器是否存活（30 秒防抖）。若容器挂死则秒级热替换拉起新容器，确保底层物理环境健康可用。
-# SkillsSyncMiddleware.before_agent
-#     ↓             └─ 把宿主机项目里的内置 Skill 代码包放进沙箱
 # HarnessPhaseMiddleware.before_agent
 #     ↓          └─ 判定是否需要审查，动态拼装质检标准，塞入 state["rubric"],置初始阶段为 state["phase"] = "planning"。
 # ProgressiveSkillsMiddleware.wrap_model_call
 #     ↓             └─ 把技能目录塞进系统提示词
+# SkillsSyncMiddleware.before_agent
+#     ↓             └─ 把宿主机项目里的内置 Skill 代码包放进沙箱
 # TodoListMiddleware.wrap_model_call
 #     ↓              └─ 把 write_todos 工具的说明书拼进 System Prompt。
 # 大模型第 1 次思考：制定施工清单
@@ -72,14 +72,32 @@ Harness 编排模块（真 Harness 架构核心）
 #     "max_iterations_reached", # 4. 重试超限（强行熔断）
 #     "grader_error"            # 5. 质检员报错
 # ]
-# 如果在倒数第二步,质检模型退回要求重新跑一轮,则在HarnessPhaseMiddleware的after_agent里updates["phase"] = Phase.reviewing.value变成审查阶段(其实不会因为这个在审批后面,审批中间件直接跳转了)
+# 如果在倒数第二步,质检模型退回要求重新跑一轮,则在HarnessPhaseMiddleware的after_agent里updates["phase"] = Phase.reviewing.value变成审查阶段
 # 执行流被打回给大模型时，大模型收到了来自质检员的消息：【rubric_grader】：金额 500 未保留两位小数，被打回！
 # 在官方的提示词 /todo_.py 第 132 行 中明确教了大模型"不要害怕随时修改待办清单。新的情况出现时，随时更新、重开或增加待办项。"
 # 如果大模型需要重新调用工具核实数据，它会立刻再次调用 write_todos，把之前的清单全量替换，增加一个步骤：
 # {"content": "重新校验并按两位小数格式化金额", "status": "in_progress"}
+# 那你问了,如果需要审批在rubric中间件里直接就跳转了HarnessPhaseMiddleware怎么判断needs_revision?
+# 因为rubric中间件有禁止跳转的逻辑
+# class SafeRubricMiddleware(RubricMiddleware):
+#     def __init__(self, **kwargs):
+#         super().__init__(**kwargs)
+#         # 写操作评审器强制限制：最多只审 1 次
+#         self._write_reviewer = RubricMiddleware(**{**kwargs, "max_iterations": 1})
 #
+#     @hook_config(can_jump_to=["model"])
+#     def after_agent(self, state, runtime):
+#         #  核心：如果大模型本轮执行了“写操作”（比如调用了创建订单、入库、删除等工具）
+#         if state.get("_review_write_attempted"):
+#             return self._write_reviewer.after_agent(state, runtime)  # 只审批 1 次，不准再跳
+#         return super().after_agent(state, runtime)
+# 如果大模型刚才已经向真实 ERP 发起了写入操作（比如扣减了库存、发起了订单），
+# 如果质检说格式不合格，绝对不能允许它 jump_to="model" 自动重新跑一遍,否则会导致真实业务数据被重复扣减、订单被重复创建
+# 此时HarnessPhaseMiddleware把阶段标记为 reviewing，把打回原因写进 review_result，停止自动循环，后端通过 SSE 把事件推给前端，然后直接调用 yield sse_event("done") 结束本次会话流
+# 所以之后应该把项目改成变更集暂存与两阶段提交模式,即先把数据库修改方案做缓存,然后审批,然后落库
+
 # 这个项目有大小循环
-# 小循环:react,langchain底层有tools_to_model方法莫怕奶奶模型是否调用了工具,调用了就回到第一个before_model
+# 小循环:react,langchain底层有tools_to_model方法判断模型是否调用了工具,调用了就回到第一个before_model
 # 大循环:模型自以为答完了,质检模型要求打回重新做,通过@hook_config(can_jump_to=["model"])实现
 # 只有你声明了 can_jump_to，真正在编译图时把 model 连上有向边， langchain/agents/factory.py 的 _add_middleware_edge 函数（它读取了 rubric.py 上的 @hook_config 注解）才会把 'model' 加入合法的目的地列表
 from __future__ import annotations
