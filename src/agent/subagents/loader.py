@@ -199,11 +199,40 @@ def resolve_subagent_tools(configs: list[dict], all_tools: list[BaseTool]) -> li
     Returns:
         包含工具对象解析结果的子Agent规格列表（可直接用于创建 SubAgent）
     """
+    # 大模型并不懂什么微服务或 RPC，在它眼里，“调用子 Agent”本质上就是“调用 task 工具”
+    # 主 Agent（Main）
+    #   │
+    #   ├─> 发现任务复杂（例如：要对比三家供应商价格，并画趋势图）
+    #   │
+    #   ├─> 决定委派，调用工具：
+    #   │   task(
+    #   │     subagent="procurement-analyst",
+    #   │     description="请对比华东三家供应商过去一年的零件A单价，并生成折线图"
+    #   │   )
+    #   │
+    #   ▼
+    # 【进入独立的 LangGraph 子图】
+    # 子 Agent（procurement-analyst）启动：
+    #   ├── 拥有纯净的全新上下文（看不见主 Agent 冗长的聊天记录）
+    #   ├── 只能调用分析专家配置里的 15 个读工具
+    #   ├── 自己思考、循环调用工具、生成图表
+    #   └── 产出严格符合规范的 Markdown 分析报告
+    #   │
+    #   ▼
+    # 【子图执行完毕，结果返回】
+    # `task` 工具把子 Agent 的输出作为 `ToolMessage` 喂回给主 Agent。
+    #   │
+    #   ▼
+    # 主 Agent 拿到干净的报告，整合后直接回答用户。
+    # task 工具不是由业务工程代码手写的，它定义在底层的 deepagents 框架内部
     subagents = []  # 存储解析后的子Agent规格
     
     # 遍历每个子Agent配置
     for config in configs:
         # 获取配置中的工具模式列表（字符串列表）
+        # 按理来说配置文件里应该只写模式的,比如:order,supplier,但是好像是测试的时候有bug
+        # 比如如果有人写了 order，原本只想给订单工具，结果子串匹配意外命中了 reorder_item
+        # 所以直接用工具名字了,没影响
         tool_patterns = config.get("tools", [])
         
         # 存储匹配到的实际工具对象

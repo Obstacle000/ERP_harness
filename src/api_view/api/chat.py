@@ -149,6 +149,7 @@ async def stream_chat_response(
                     # --- 结构化 todo 列表（来自 TodoListMiddleware 的 write_todos 状态）---
                     todos = chunk.get("todos")
                     if todos is not None:
+                        # 判断todos是否发生变动
                         todos_sig = json.dumps(todos, ensure_ascii=False, sort_keys=True)
                         if todos_sig != last_todos_sig:
                             last_todos_sig = todos_sig
@@ -267,6 +268,10 @@ async def stream_chat_response(
                 # AIMessage with tool_call_chunks → tool_start / tool_args
                 if tool_call_chunks:
                     # 首次收到工具调用时结束 thinking 状态
+                    # 为什么第 1 个 Token 来时发射 thinking: {status: "end"}？
+                    # 大模型（尤其是带思考链的模型）在回答前会有几秒钟的“思考延迟”。
+                    # 前端借此展示“🤔 思考中...”动效；当第 1 个真正的内容 Token 吐出时，
+                    # 必须立刻关掉思考动效，切换为正文打字机模式。
                     if not thinking_emitted:
                         yield sse_event("thinking", {"status": "end"})
                         thinking_emitted = True
